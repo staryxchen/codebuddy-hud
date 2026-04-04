@@ -73,20 +73,28 @@ def make_bar(pct: float, width: int = 10) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Read latest inputTokens from transcript JSONL (last 300 lines only)
+# Read transcript tail — shared helper used by multiple parsers.
+# Uses explicit stdout/stderr pipes for Python 3.6 compatibility.
 # ---------------------------------------------------------------------------
-def get_input_tokens(transcript_path: str) -> int:
+def _read_transcript_tail(transcript_path: str, n: int = 500) -> list:
     if not transcript_path or not os.path.exists(transcript_path):
-        return 0
+        return []
     try:
         result = subprocess.run(
-            ['tail', '-n', '300', transcript_path],
-            capture_output=True, text=True, timeout=1
+            ['tail', '-n', str(n), transcript_path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=1
         )
-        lines = result.stdout.splitlines()
+        return result.stdout.decode('utf-8', errors='replace').splitlines()
     except Exception:
-        return 0
+        return []
 
+
+# ---------------------------------------------------------------------------
+# Read latest inputTokens from transcript JSONL
+# ---------------------------------------------------------------------------
+def get_input_tokens(transcript_path: str) -> int:
+    lines = _read_transcript_tail(transcript_path, 300)
     last_tokens = 0
     for line in reversed(lines):
         line = line.strip()
