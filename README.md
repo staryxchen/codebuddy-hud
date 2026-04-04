@@ -1,5 +1,7 @@
 # codebuddy-hud
 
+[![CI](https://github.com/staryxchen/codebuddy-hud/actions/workflows/ci.yml/badge.svg)](https://github.com/staryxchen/codebuddy-hud/actions/workflows/ci.yml)
+
 A HUD-style status line for [CodeBuddy Code](https://cnb.cool/codebuddy/codebuddy-code), inspired by [claude-hud](https://github.com/jarrodwatts/claude-hud).
 
 ## What it shows
