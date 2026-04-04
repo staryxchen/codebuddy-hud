@@ -4,7 +4,8 @@ codebuddy-hud: A HUD-style status line for CodeBuddy Code.
 Visual style aligned with claude-hud (github.com/jarrodwatts/claude-hud).
 
 Line 1: [model]  │  folder  git:(branch*)
-Line 2: Context [████░░░░░░] pct%  │  $cost  │  duration
+Line 2: Context [████░░░░░░] pct%
+Line 3: ◐ Read: src/index.ts   ◐ Bash: npm test   (running tools, if any)
 
 Install:
   ln -sf /data/workspace/codebuddy-hud/hud.py ~/.codebuddy/hud.py
@@ -112,6 +113,100 @@ def get_input_tokens(transcript_path: str) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Extract a short human-readable target from a tool call's arguments dict
+# ---------------------------------------------------------------------------
+def _tool_target(name: str, inp: dict) -> str:
+    """Return a short target string for a tool call, e.g. filename or command."""
+    # File-oriented tools
+    for key in ('file_path', 'path', 'pattern', 'glob'):
+        val = inp.get(key, '')
+        if val:
+            # Show only last two path segments to keep it short
+            parts = val.replace('\\', '/').rstrip('/').split('/')
+            return '/'.join(parts[-2:]) if len(parts) > 1 else parts[0]
+    # Bash: first 35 chars of command
+    cmd = inp.get('command', '')
+    if cmd:
+        cmd = cmd.strip().split('\n')[0]
+        return cmd[:35] + ('…' if len(cmd) > 35 else '')
+    # description / query fallback
+    for key in ('description', 'query', 'prompt'):
+        val = inp.get(key, '')
+        if val:
+            return str(val)[:35] + ('…' if len(str(val)) > 35 else '')
+    return ''
+
+
+# ---------------------------------------------------------------------------
+# Get running tools: function_call entries with no matching function_call_result
+# CodeBuddy transcript format uses flat JSONL entries:
+#   {"type":"function_call",  "callId":"...", "name":"Read", "arguments":"{...}"}
+#   {"type":"function_call_result", "callId":"...", "status":"completed", ...}
+# ---------------------------------------------------------------------------
+def get_running_tools(transcript_path: str) -> list:
+    """
+    Returns list of (tool_name, target_str) for tools currently in flight.
+    Looks at the last 500 lines of the transcript for speed.
+    """
+    lines = _read_transcript_tail(transcript_path, 500)
+
+    tool_calls  = {}   # callId -> (name, target)
+    result_ids  = set()
+
+    for raw in lines:
+        raw = raw.strip()
+        if not raw:
+            continue
+        # Fast pre-filter to skip irrelevant lines
+        if 'function_call' not in raw:
+            continue
+        try:
+            entry = json.loads(raw)
+        except Exception:
+            continue
+
+        etype = entry.get('type', '')
+        if etype == 'function_call':
+            cid  = entry.get('callId', '')
+            name = entry.get('name', '')
+            # arguments is a JSON string in the real format
+            args_raw = entry.get('arguments', '{}') or '{}'
+            try:
+                inp = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+            except Exception:
+                inp = {}
+            if cid and name:
+                tool_calls[cid] = (name, _tool_target(name, inp))
+        elif etype == 'function_call_result':
+            cid = entry.get('callId', '')
+            if cid:
+                result_ids.add(cid)
+
+    running = [
+        (name, target)
+        for cid, (name, target) in tool_calls.items()
+        if cid not in result_ids
+    ]
+    # Return at most 2, most-recent first (dict preserves insertion order in Py3.7+)
+    return running[-2:][::-1]
+
+
+# ---------------------------------------------------------------------------
+# Render the running-tools line (Line 3)
+# ---------------------------------------------------------------------------
+def fmt_tools_line(running: list) -> str:
+    if not running:
+        return ''
+    parts = []
+    for name, target in running:
+        label = f"{YELLOW}◐{RESET} {CYAN}{name}{RESET}"
+        if target:
+            label += f"{DIM}:{RESET} {target}"
+        parts.append(label)
+    return '   '.join(parts)
+
+
+# ---------------------------------------------------------------------------
 # Git info in claude-hud style: git:(branch*)
 # ---------------------------------------------------------------------------
 def get_git_info(cwd: str) -> str:
@@ -189,6 +284,9 @@ def main():
     # Git
     git_str = get_git_info(cwd) if cwd else ''
 
+    # Running tools
+    running_tools = get_running_tools(transcript) if transcript else []
+
     # ── Line 1: [model]  │  folder  git:(branch*) ──────────────────────────
     model_part  = f"{WHITE}[{model_name}]{RESET}"
     folder_part = f"{CYAN}{folder}{RESET}" if folder else ''
@@ -207,11 +305,15 @@ def main():
     pct_color = context_color(ctx_pct)
     ctx_part  = f"{ctx_label} {bar} {pct_color}{pct_str}{RESET}"
 
-    parts2 = [ctx_part]
+    line2 = ctx_part
 
-    line2 = SEP.join(parts2)
+    # ── Line 3: running tools (only when tools are in flight) ───────────────
+    tools_line = fmt_tools_line(running_tools)
 
-    print(f"{line1}\n{line2}")
+    output = f"{line1}\n{line2}"
+    if tools_line:
+        output += f"\n{tools_line}"
+    print(output)
 
 
 if __name__ == '__main__':
