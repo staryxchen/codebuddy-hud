@@ -26,7 +26,7 @@ Line 3 only appears when tools are actively running; it disappears when idle.
 **One command:**
 
 ```bash
-git clone https://cnb.cool/codebuddy/codebuddy-hud ~/codebuddy-hud && bash ~/codebuddy-hud/install.sh
+git clone https://github.com/staryxchen/codebuddy-hud ~/codebuddy-hud && bash ~/codebuddy-hud/install.sh
 ```
 
 Then **restart CodeBuddy Code**.
@@ -42,7 +42,7 @@ If you prefer to do it by hand:
 
 **1.** Clone this repo somewhere:
 ```bash
-git clone https://cnb.cool/codebuddy/codebuddy-hud ~/codebuddy-hud
+git clone https://github.com/staryxchen/codebuddy-hud ~/codebuddy-hud
 ```
 
 **2.** Symlink the script:
