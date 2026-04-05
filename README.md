@@ -4,7 +4,7 @@
 
 A HUD-style status line for [CodeBuddy Code](https://cnb.cool/codebuddy/codebuddy-code), inspired by [claude-hud](https://github.com/jarrodwatts/claude-hud).
 
-![codebuddy-hud preview](preview.png)
+![codebuddy-hud preview](codebuddy-hud.png)
 
 ## What it shows
 
