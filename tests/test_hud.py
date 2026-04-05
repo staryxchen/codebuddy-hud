@@ -24,7 +24,7 @@ def strip_ansi(s: str) -> str:
     return ANSI_RE.sub('', s)
 
 
-# ── Fixtures ─────────────────────────────────────────────────────────────────
+# ── Fixtures ──────────────────────────────────────────────────────────────────
 
 def make_transcript(entries: list) -> str:
     """Write a list of dicts as JSONL to a temp file; return the path."""
@@ -53,11 +53,10 @@ class TestContextColor:
         assert hud.context_color(1.0) == hud.RED
 
 
-# ── make_bar ─────────────────────────────────────────────────────────────────
+# ── make_bar ──────────────────────────────────────────────────────────────────
 
 class TestMakeBar:
     def _visible(self, bar: str) -> str:
-        """Strip ANSI, return only block characters."""
         return strip_ansi(bar)
 
     def test_empty_bar(self):
@@ -88,212 +87,69 @@ class TestMakeBar:
         assert hud.RED   in high_bar
 
 
-# ── fmt_tokens ───────────────────────────────────────────────────────────────
+# ── get_tool_counts ───────────────────────────────────────────────────────────
 
-class TestFmtTokens:
-    def test_small_values(self):
-        assert hud.fmt_tokens(500, 200_000) == '500/200k'
+class TestGetToolCounts:
+    def test_missing_file(self):
+        assert hud.get_tool_counts('/nonexistent.jsonl') == {}
 
-    def test_large_values(self):
-        assert hud.fmt_tokens(45_000, 200_000) == '45k/200k'
-
-    def test_1m_context(self):
-        assert hud.fmt_tokens(300_000, 1_000_000) == '300k/1000k'
-
-
-# ── fmt_duration ─────────────────────────────────────────────────────────────
-
-class TestFmtDuration:
-    def test_zero(self):
-        assert hud.fmt_duration(0) == ''
-
-    def test_seconds_only(self):
-        assert hud.fmt_duration(45_000) == '45s'
-
-    def test_minutes_and_seconds(self):
-        assert hud.fmt_duration(65_000) == '1m05s'
-
-    def test_hours_and_minutes(self):
-        assert hud.fmt_duration(3_720_000) == '1h02m'
-
-
-# ── context_window ────────────────────────────────────────────────────────────
-
-class TestContextWindow:
-    def test_1m_model(self):
-        assert hud.context_window('claude-sonnet-4-6-1m') == 1_000_000
-
-    def test_200k_model(self):
-        assert hud.context_window('claude-opus-200k') == 200_000
-
-    def test_default(self):
-        assert hud.context_window('unknown-model') == 200_000
-
-
-# ── _tool_target ──────────────────────────────────────────────────────────────
-
-class TestToolTarget:
-    def test_file_path(self):
-        target = hud._tool_target('Read', {'file_path': '/a/b/c/src/index.ts'})
-        assert target == 'src/index.ts'
-
-    def test_single_segment_path(self):
-        target = hud._tool_target('Read', {'file_path': 'README.md'})
-        assert target == 'README.md'
-
-    def test_bash_short_command(self):
-        target = hud._tool_target('Bash', {'command': 'npm test'})
-        assert target == 'npm test'
-
-    def test_bash_long_command_truncated(self):
-        cmd = 'x' * 40
-        target = hud._tool_target('Bash', {'command': cmd})
-        assert target.endswith('…')
-        assert len(strip_ansi(target)) <= 36  # 35 chars + ellipsis
-
-    def test_bash_multiline_shows_first_line(self):
-        target = hud._tool_target('Bash', {'command': 'echo hello\necho world'})
-        assert target == 'echo hello'
-
-    def test_pattern_key(self):
-        target = hud._tool_target('Glob', {'pattern': '**/*.ts'})
-        assert target == '**/*.ts'
-
-    def test_description_fallback(self):
-        target = hud._tool_target('Agent', {'description': 'explore codebase'})
-        assert target == 'explore codebase'
-
-    def test_empty_input(self):
-        target = hud._tool_target('Unknown', {})
-        assert target == ''
-
-
-# ── get_input_tokens ──────────────────────────────────────────────────────────
-
-class TestGetInputTokens:
-    def test_returns_zero_for_missing_file(self):
-        assert hud.get_input_tokens('/nonexistent/path.jsonl') == 0
-
-    def test_returns_zero_for_empty_path(self):
-        assert hud.get_input_tokens('') == 0
-
-    def test_reads_latest_token_count(self):
-        entries = [
-            {'providerData': {'usage': {'inputTokens': 1000}}},
-            {'providerData': {'usage': {'inputTokens': 2500}}},
-        ]
-        path = make_transcript(entries)
-        try:
-            assert hud.get_input_tokens(path) == 2500
-        finally:
-            os.unlink(path)
-
-    def test_ignores_malformed_lines(self):
-        path = tempfile.mktemp(suffix='.jsonl')
-        with open(path, 'w') as f:
-            f.write('not json\n')
-            f.write(json.dumps({'providerData': {'usage': {'inputTokens': 999}}}) + '\n')
-        try:
-            assert hud.get_input_tokens(path) == 999
-        finally:
-            os.unlink(path)
-
-
-# ── get_running_tools ─────────────────────────────────────────────────────────
-
-class TestGetRunningTools:
     def test_empty_transcript(self):
         path = make_transcript([])
         try:
-            assert hud.get_running_tools(path) == []
+            assert hud.get_tool_counts(path) == {}
         finally:
             os.unlink(path)
 
-    def test_missing_file(self):
-        assert hud.get_running_tools('/nonexistent.jsonl') == []
-
-    def test_completed_tool_not_shown(self):
+    def test_completed_tool_counted(self):
         entries = [
-            {'type': 'function_call', 'callId': 'c1', 'name': 'Read',
-             'arguments': '{"file_path": "/a/b.py"}'},
+            {'type': 'function_call', 'callId': 'c1', 'name': 'Read', 'arguments': '{}'},
             {'type': 'function_call_result', 'callId': 'c1', 'status': 'completed'},
         ]
         path = make_transcript(entries)
         try:
-            assert hud.get_running_tools(path) == []
+            counts = hud.get_tool_counts(path)
+            assert counts == {'Read': 1}
         finally:
             os.unlink(path)
 
-    def test_running_tool_shown(self):
+    def test_incomplete_tool_not_counted(self):
         entries = [
-            {'type': 'function_call', 'callId': 'c1', 'name': 'Read',
-             'arguments': '{"file_path": "/a/b/c.py"}'},
+            {'type': 'function_call', 'callId': 'c1', 'name': 'Bash', 'arguments': '{}'},
         ]
         path = make_transcript(entries)
         try:
-            result = hud.get_running_tools(path)
-            assert len(result) == 1
-            name, target = result[0]
-            assert name == 'Read'
-            assert target == 'b/c.py'
+            counts = hud.get_tool_counts(path)
+            assert counts == {}
         finally:
             os.unlink(path)
 
-    def test_two_running_tools(self):
+    def test_multiple_calls_same_tool(self):
         entries = [
-            {'type': 'function_call', 'callId': 'c1', 'name': 'Read',
-             'arguments': '{"file_path": "/a/index.ts"}'},
-            {'type': 'function_call', 'callId': 'c2', 'name': 'Bash',
-             'arguments': '{"command": "npm test"}'},
-        ]
-        path = make_transcript(entries)
-        try:
-            result = hud.get_running_tools(path)
-            assert len(result) == 2
-            names = [r[0] for r in result]
-            assert 'Read' in names
-            assert 'Bash' in names
-        finally:
-            os.unlink(path)
-
-    def test_max_two_running_tools(self):
-        entries = [
-            {'type': 'function_call', 'callId': f'c{i}', 'name': 'Read',
-             'arguments': f'{{"file_path": "/a/file{i}.py"}}'}
-            for i in range(5)
-        ]
-        path = make_transcript(entries)
-        try:
-            result = hud.get_running_tools(path)
-            assert len(result) == 2
-        finally:
-            os.unlink(path)
-
-    def test_mixed_completed_and_running(self):
-        entries = [
-            {'type': 'function_call', 'callId': 'c1', 'name': 'Read',
-             'arguments': '{"file_path": "/done.py"}'},
+            {'type': 'function_call', 'callId': 'c1', 'name': 'Read', 'arguments': '{}'},
             {'type': 'function_call_result', 'callId': 'c1', 'status': 'completed'},
-            {'type': 'function_call', 'callId': 'c2', 'name': 'Bash',
-             'arguments': '{"command": "npm run build"}'},
+            {'type': 'function_call', 'callId': 'c2', 'name': 'Read', 'arguments': '{}'},
+            {'type': 'function_call_result', 'callId': 'c2', 'status': 'completed'},
         ]
         path = make_transcript(entries)
         try:
-            result = hud.get_running_tools(path)
-            assert len(result) == 1
-            assert result[0][0] == 'Bash'
+            counts = hud.get_tool_counts(path)
+            assert counts == {'Read': 2}
         finally:
             os.unlink(path)
 
-    def test_bash_target_extracted(self):
+    def test_mixed_tools(self):
         entries = [
-            {'type': 'function_call', 'callId': 'c1', 'name': 'Bash',
-             'arguments': '{"command": "git status"}'},
+            {'type': 'function_call', 'callId': 'c1', 'name': 'Bash', 'arguments': '{}'},
+            {'type': 'function_call_result', 'callId': 'c1', 'status': 'completed'},
+            {'type': 'function_call', 'callId': 'c2', 'name': 'Read', 'arguments': '{}'},
+            {'type': 'function_call_result', 'callId': 'c2', 'status': 'completed'},
+            {'type': 'function_call', 'callId': 'c3', 'name': 'Read', 'arguments': '{}'},
+            {'type': 'function_call_result', 'callId': 'c3', 'status': 'completed'},
         ]
         path = make_transcript(entries)
         try:
-            result = hud.get_running_tools(path)
-            assert result[0][1] == 'git status'
+            counts = hud.get_tool_counts(path)
+            assert counts == {'Bash': 1, 'Read': 2}
         finally:
             os.unlink(path)
 
@@ -301,31 +157,52 @@ class TestGetRunningTools:
 # ── fmt_tools_line ────────────────────────────────────────────────────────────
 
 class TestFmtToolsLine:
-    def test_empty_list(self):
-        assert hud.fmt_tools_line([]) == ''
+    def test_empty_counts(self):
+        assert hud.fmt_tools_line({}) == ''
 
-    def test_single_tool_with_target(self):
-        line = strip_ansi(hud.fmt_tools_line([('Read', 'src/index.ts')]))
-        assert '◐' in line
-        assert 'Read' in line
-        assert 'src/index.ts' in line
-
-    def test_single_tool_no_target(self):
-        line = strip_ansi(hud.fmt_tools_line([('Bash', '')]))
+    def test_hidden_tools_filtered(self):
+        counts = {'Bash': 5, 'TaskCreate': 10, 'EnterPlanMode': 3}
+        line = strip_ansi(hud.fmt_tools_line(counts))
         assert 'Bash' in line
+        assert 'TaskCreate' not in line
+        assert 'EnterPlanMode' not in line
 
-    def test_two_tools_separated(self):
-        line = strip_ansi(hud.fmt_tools_line([
-            ('Read', 'a/b.ts'),
-            ('Bash', 'npm test'),
-        ]))
+    def test_shows_checkmark(self):
+        line = strip_ansi(hud.fmt_tools_line({'Read': 3}))
+        assert '✓' in line
         assert 'Read' in line
-        assert 'Bash' in line
+
+    def test_count_shown_when_gt_1(self):
+        line = strip_ansi(hud.fmt_tools_line({'Bash': 5}))
+        assert '×5' in line
+
+    def test_no_count_when_eq_1(self):
+        line = strip_ansi(hud.fmt_tools_line({'Read': 1}))
+        assert '×' not in line
+
+    def test_sorted_by_count_descending(self):
+        counts = {'Read': 2, 'Bash': 10, 'Edit': 5}
+        line = strip_ansi(hud.fmt_tools_line(counts))
+        bash_pos = line.index('Bash')
+        edit_pos = line.index('Edit')
+        read_pos = line.index('Read')
+        assert bash_pos < edit_pos < read_pos
+
+    def test_max_five_tools(self):
+        counts = {f'Tool{i}': i for i in range(1, 10)}
+        line = strip_ansi(hud.fmt_tools_line(counts))
+        shown = [t for t in counts if t in line]
+        assert len(shown) <= 5
+
+    def test_all_hidden_returns_empty(self):
+        counts = {'TaskCreate': 5, 'EnterPlanMode': 3, 'Skill': 2}
+        assert hud.fmt_tools_line(counts) == ''
 
 
 # ── end-to-end: main() via subprocess ────────────────────────────────────────
 
 HUD_PY = os.path.join(os.path.dirname(__file__), '..', 'hud.py')
+
 
 def run_hud(stdin_data: dict, transcript_entries: list = None) -> str:
     """Run hud.py with given stdin JSON and optional transcript; return stdout."""
@@ -373,26 +250,33 @@ class TestEndToEnd:
         assert 'Context' in out
         assert '%' in out
 
-    def test_line3_appears_with_running_tool(self):
+    def test_line3_appears_with_completed_tool(self):
         entries = [
             {'type': 'function_call', 'callId': 'c1', 'name': 'Bash',
              'arguments': '{"command": "npm test"}'},
+            {'type': 'function_call_result', 'callId': 'c1', 'status': 'completed'},
         ]
         out = strip_ansi(run_hud(BASE_STDIN, transcript_entries=entries))
         lines = [l for l in out.splitlines() if l.strip()]
         assert len(lines) == 3
-        assert '◐' in lines[2]
+        assert '✓' in lines[2]
         assert 'Bash' in lines[2]
 
-    def test_line3_absent_when_all_complete(self):
+    def test_line3_absent_when_all_hidden(self):
         entries = [
-            {'type': 'function_call', 'callId': 'c1', 'name': 'Read',
-             'arguments': '{"file_path": "/a/b.py"}'},
+            {'type': 'function_call', 'callId': 'c1', 'name': 'TaskCreate',
+             'arguments': '{}'},
             {'type': 'function_call_result', 'callId': 'c1', 'status': 'completed'},
         ]
         out = strip_ansi(run_hud(BASE_STDIN, transcript_entries=entries))
         lines = [l for l in out.splitlines() if l.strip()]
         assert len(lines) == 2
+
+    def test_context_pct_from_stdin(self):
+        stdin = dict(BASE_STDIN)
+        stdin['context_window'] = {'used_percentage': 42.5, 'context_window_size': 1_000_000}
+        out = strip_ansi(run_hud(stdin))
+        assert '42.5%' in out
 
     def test_invalid_stdin_outputs_blank(self):
         result = subprocess.run(
@@ -404,15 +288,3 @@ class TestEndToEnd:
         )
         assert result.returncode == 0
         assert result.stdout.decode().strip() == ''
-
-    def test_context_pct_shown(self):
-        # Use a 200k model so 100k tokens = 50%
-        stdin = {
-            'model': {'id': 'claude-opus-200k', 'display_name': 'Claude-Opus-200k'},
-            'workspace': {'current_dir': '/tmp'},
-        }
-        entries = [
-            {'providerData': {'usage': {'inputTokens': 100_000}}},
-        ]
-        out = strip_ansi(run_hud(stdin, transcript_entries=entries))
-        assert '50.0%' in out  # 100k / 200k = 50%

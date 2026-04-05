@@ -5,7 +5,7 @@ Visual style aligned with claude-hud (github.com/jarrodwatts/claude-hud).
 
 Line 1: [model]  │  folder  git:(branch*)
 Line 2: Context [████░░░░░░] pct%
-Line 3: ◐ Read: src/index.ts   ◐ Bash: npm test   (running tools, if any)
+Line 3: ✓ Bash ×32  ✓ Read ×5  ✓ Edit ×3   (top-5 tool usage stats, by count)
 
 Install:
   ln -sf /data/workspace/codebuddy-hud/hud.py ~/.codebuddy/hud.py
@@ -13,7 +13,7 @@ Install:
 Add to ~/.codebuddy/settings.json:
   "statusLine": {
     "type": "command",
-    "command": "python3.11 ~/.codebuddy/hud.py",
+    "command": "python3.12 ~/.codebuddy/hud.py",
     "padding": 0
   }
 """
@@ -38,16 +38,8 @@ WHITE   = '\x1b[37m'
 
 SEP = f" \u2502 "  # │
 
-# ---------------------------------------------------------------------------
-# Context window sizes
-# ---------------------------------------------------------------------------
-def context_window(model_id: str) -> int:
-    mid = model_id.lower()
-    if '1m' in mid:
-        return 1_000_000
-    if '200k' in mid:
-        return 200_000
-    return 200_000
+HIDDEN_TOOLS  = {'AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode', 'TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList',
+                 'TaskStop', 'TaskOutput', 'ToolSearch', 'DeferExecuteTool', 'Skill'}
 
 
 # ---------------------------------------------------------------------------
@@ -74,10 +66,9 @@ def make_bar(pct: float, width: int = 10) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Read transcript tail — shared helper used by multiple parsers.
-# Uses explicit stdout/stderr pipes for Python 3.6 compatibility.
+# Read transcript tail — shared helper.
 # ---------------------------------------------------------------------------
-def _read_transcript_tail(transcript_path: str, n: int = 500) -> list:
+def _read_transcript_tail(transcript_path: str, n: int = 800) -> list:
     if not transcript_path or not os.path.exists(transcript_path):
         return []
     try:
@@ -92,73 +83,19 @@ def _read_transcript_tail(transcript_path: str, n: int = 500) -> list:
 
 
 # ---------------------------------------------------------------------------
-# Read latest inputTokens from transcript JSONL
+# Get completed tool usage counts from transcript.
+# Returns {tool_name: count}
 # ---------------------------------------------------------------------------
-def get_input_tokens(transcript_path: str) -> int:
-    lines = _read_transcript_tail(transcript_path, 300)
-    last_tokens = 0
-    for line in reversed(lines):
-        line = line.strip()
-        if not line or 'inputTokens' not in line:
-            continue
-        try:
-            entry  = json.loads(line)
-            tokens = entry.get('providerData', {}).get('usage', {}).get('inputTokens', 0)
-            if tokens:
-                last_tokens = tokens
-                break
-        except Exception:
-            continue
-    return last_tokens
+def get_tool_counts(transcript_path: str) -> dict:
+    lines = _read_transcript_tail(transcript_path, 800)
 
-
-# ---------------------------------------------------------------------------
-# Extract a short human-readable target from a tool call's arguments dict
-# ---------------------------------------------------------------------------
-def _tool_target(name: str, inp: dict) -> str:
-    """Return a short target string for a tool call, e.g. filename or command."""
-    # File-oriented tools
-    for key in ('file_path', 'path', 'pattern', 'glob'):
-        val = inp.get(key, '')
-        if val:
-            # Show only last two path segments to keep it short
-            parts = val.replace('\\', '/').rstrip('/').split('/')
-            return '/'.join(parts[-2:]) if len(parts) > 1 else parts[0]
-    # Bash: first 35 chars of command
-    cmd = inp.get('command', '')
-    if cmd:
-        cmd = cmd.strip().split('\n')[0]
-        return cmd[:35] + ('…' if len(cmd) > 35 else '')
-    # description / query fallback
-    for key in ('description', 'query', 'prompt'):
-        val = inp.get(key, '')
-        if val:
-            return str(val)[:35] + ('…' if len(str(val)) > 35 else '')
-    return ''
-
-
-# ---------------------------------------------------------------------------
-# Get running tools: function_call entries with no matching function_call_result
-# CodeBuddy transcript format uses flat JSONL entries:
-#   {"type":"function_call",  "callId":"...", "name":"Read", "arguments":"{...}"}
-#   {"type":"function_call_result", "callId":"...", "status":"completed", ...}
-# ---------------------------------------------------------------------------
-def get_running_tools(transcript_path: str) -> list:
-    """
-    Returns list of (tool_name, target_str) for tools currently in flight.
-    Looks at the last 500 lines of the transcript for speed.
-    """
-    lines = _read_transcript_tail(transcript_path, 500)
-
-    tool_calls  = {}   # callId -> (name, target)
-    result_ids  = set()
+    tool_calls = {}  # callId -> name
+    result_ids = set()
+    counts     = {}  # name -> completed count
 
     for raw in lines:
         raw = raw.strip()
-        if not raw:
-            continue
-        # Fast pre-filter to skip irrelevant lines
-        if 'function_call' not in raw:
+        if not raw or 'function_call' not in raw:
             continue
         try:
             entry = json.loads(raw)
@@ -169,41 +106,39 @@ def get_running_tools(transcript_path: str) -> list:
         if etype == 'function_call':
             cid  = entry.get('callId', '')
             name = entry.get('name', '')
-            # arguments is a JSON string in the real format
-            args_raw = entry.get('arguments', '{}') or '{}'
-            try:
-                inp = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
-            except Exception:
-                inp = {}
             if cid and name:
-                tool_calls[cid] = (name, _tool_target(name, inp))
+                tool_calls[cid] = name
         elif etype == 'function_call_result':
             cid = entry.get('callId', '')
             if cid:
                 result_ids.add(cid)
 
-    running = [
-        (name, target)
-        for cid, (name, target) in tool_calls.items()
-        if cid not in result_ids
-    ]
-    # Return at most 2, most-recent first (dict preserves insertion order in Py3.7+)
-    return running[-2:][::-1]
+    for cid, name in tool_calls.items():
+        if cid in result_ids:
+            counts[name] = counts.get(name, 0) + 1
+
+    return counts
 
 
 # ---------------------------------------------------------------------------
-# Render the running-tools line (Line 3)
+# Render the tool stats line (Line 3): top-5 by count
 # ---------------------------------------------------------------------------
-def fmt_tools_line(running: list) -> str:
-    if not running:
+MAX_TOOLS = 5
+
+
+def fmt_tools_line(counts: dict) -> str:
+    visible = {n: c for n, c in counts.items() if n not in HIDDEN_TOOLS}
+    if not visible:
         return ''
+
+    top = sorted(visible, key=lambda n: -visible[n])[:MAX_TOOLS]
     parts = []
-    for name, target in running:
-        label = f"{YELLOW}◐{RESET} {CYAN}{name}{RESET}"
-        if target:
-            label += f"{DIM}:{RESET} {target}"
-        parts.append(label)
-    return '   '.join(parts)
+    for name in top:
+        n = visible[name]
+        count_str = f" {DIM}×{n}{RESET}" if n > 1 else ''
+        parts.append(f"{GREEN}✓{RESET} {CYAN}{name}{RESET}{count_str}")
+
+    return '  '.join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -225,35 +160,9 @@ def get_git_info(cwd: str) -> str:
             )
         except subprocess.CalledProcessError:
             dirty = '*'
-        # Format: git:(branch*)  — cyan parens, yellow branch
         return f"{CYAN}git:({RESET}{YELLOW}{branch}{dirty}{RESET}{CYAN}){RESET}"
     except Exception:
         return ''
-
-
-# ---------------------------------------------------------------------------
-# Duration  e.g. 65000ms → "1m05s", 3720000ms → "1h02m"
-# ---------------------------------------------------------------------------
-def fmt_duration(ms: float) -> str:
-    if not ms:
-        return ''
-    s = int(ms / 1000)
-    m, s = divmod(s, 60)
-    h, m = divmod(m, 60)
-    if h:
-        return f"{h}h{m:02d}m"
-    if m:
-        return f"{m}m{s:02d}s"
-    return f"{s}s"
-
-
-# ---------------------------------------------------------------------------
-# Format token count for display
-# ---------------------------------------------------------------------------
-def fmt_tokens(n: int, total: int) -> str:
-    if n >= 1000:
-        return f"{n/1000:.0f}k/{total//1000}k"
-    return f"{n}/{total//1000}k"
 
 
 # ---------------------------------------------------------------------------
@@ -273,19 +182,22 @@ def main():
     model_name  = data.get('model', {}).get('display_name', model_id)
     transcript  = data.get('transcript_path', '')
 
-    # Context usage
-    input_tokens = get_input_tokens(transcript)
-    ctx_size     = context_window(model_id)
-    ctx_pct      = input_tokens / ctx_size if ctx_size else 0
-    bar          = make_bar(ctx_pct)
-    pct_str      = f"{ctx_pct * 100:.1f}%"
-    tok_str      = fmt_tokens(input_tokens, ctx_size)
+    # Context usage — prefer stdin's context_window data (accurate, no parsing needed)
+    ctx_window  = data.get('context_window', {})
+    ctx_pct_raw = ctx_window.get('used_percentage', 0)
+    if ctx_pct_raw:
+        ctx_pct = ctx_pct_raw / 100.0
+    else:
+        ctx_pct = 0.0
+
+    bar     = make_bar(ctx_pct)
+    pct_str = f"{ctx_pct * 100:.1f}%"
 
     # Git
     git_str = get_git_info(cwd) if cwd else ''
 
-    # Running tools
-    running_tools = get_running_tools(transcript) if transcript else []
+    # Tool usage counts
+    tool_counts = get_tool_counts(transcript) if transcript else {}
 
     # ── Line 1: [model]  │  folder  git:(branch*) ──────────────────────────
     model_part  = f"{WHITE}[{model_name}]{RESET}"
@@ -303,12 +215,10 @@ def main():
     # ── Line 2: Context [bar] pct% ──────────────────────────────────────────
     ctx_label = f"{DIM}Context{RESET}"
     pct_color = context_color(ctx_pct)
-    ctx_part  = f"{ctx_label} {bar} {pct_color}{pct_str}{RESET}"
+    line2     = f"{ctx_label} {bar} {pct_color}{pct_str}{RESET}"
 
-    line2 = ctx_part
-
-    # ── Line 3: running tools (only when tools are in flight) ───────────────
-    tools_line = fmt_tools_line(running_tools)
+    # ── Line 3: tool usage stats ─────────────────────────────────────────────
+    tools_line = fmt_tools_line(tool_counts)
 
     output = f"{line1}\n{line2}"
     if tools_line:
