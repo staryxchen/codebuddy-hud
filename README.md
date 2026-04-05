@@ -11,7 +11,7 @@ A HUD-style status line for [CodeBuddy Code](https://cnb.cool/codebuddy/codebudd
 ```
 [Claude-Sonnet-4.6-1M] │ my-project  git:(main*)
 Context ████░░░░░░ 41.8%
-◐ Bash: npm run build   ◐ Read: src/index.ts
+✓ Bash ×32  ✓ Read ×8  ✓ Edit ×5  ✓ WebFetch ×3  ✓ Grep ×2
 ```
 
 | Field | Source |
@@ -19,11 +19,11 @@ Context ████░░░░░░ 41.8%
 | Model name | `model.display_name` from stdin |
 | Folder name | `workspace.current_dir` from stdin |
 | Git branch + dirty (`*`) | `git branch --show-current` |
-| Context bar + % | Latest `inputTokens` in transcript JSONL ÷ model context window |
-| Running tools (Line 3) | `function_call` entries with no matching `function_call_result` in transcript |
+| Context bar + % | `context_window.used_percentage` from stdin |
+| Tool stats (Line 3) | Completed `function_call` entries in transcript, top 5 by count |
 
 Context bar color: green < 70%, yellow 70–85%, red ≥ 85%.  
-Line 3 only appears when tools are actively running; it disappears when idle.
+Line 3 shows the top 5 most-used tools this session; hidden when no tools have run.
 
 ## Installation
 
